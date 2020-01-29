@@ -1,5 +1,8 @@
 #include "pch.h"
 
+#include "lib/ZoneSet.h"
+#include "lib/RegistryHelpers.h"
+
 struct ZoneSet : winrt::implements<ZoneSet, IZoneSet>
 {
 public:
@@ -46,7 +49,7 @@ IFACEMETHODIMP_(winrt::com_ptr<IZone>) ZoneSet::ZoneFromPoint(POINT pt) noexcept
     winrt::com_ptr<IZone> smallestKnownZone = nullptr;
     // To reduce redundant calculations, we will store the last known zones area.
     int smallestKnownZoneArea = INT32_MAX;
-    for (auto iter = m_zones.begin(); iter != m_zones.end(); iter++)
+    for (auto iter = m_zones.rbegin(); iter != m_zones.rend(); iter++)
     {
         if (winrt::com_ptr<IZone> zone = iter->try_as<IZone>())
         {

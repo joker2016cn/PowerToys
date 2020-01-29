@@ -1,5 +1,12 @@
 #include "pch.h"
+
+#include <common/common.h>
 #include <common/dpi_aware.h>
+
+#include "ZoneWindow.h"
+#include "trace.h"
+#include "util.h"
+#include "RegistryHelpers.h"
 
 #include <ShellScalingApi.h>
 
@@ -41,7 +48,6 @@ private:
     void LoadSettings() noexcept;
     void InitializeZoneSets(MONITORINFO const& mi) noexcept;
     void LoadZoneSetsFromRegistry() noexcept;
-    void AddDefaultZoneSet(MONITORINFO const& mi) noexcept;
     void UpdateActiveZoneSet(_In_opt_ IZoneSet* zoneSet) noexcept;
     LRESULT WndProc(UINT message, WPARAM wparam, LPARAM lparam) noexcept;
     void DrawBackdrop(wil::unique_hdc& hdc, RECT const& clientRect) noexcept;
@@ -123,6 +129,16 @@ ZoneWindow::ZoneWindow(
         MakeWindowTransparent(m_window.get());
         if (flashZones)
         {
+            // Don't flash if the foreground window is in full screen mode
+            RECT windowRect;
+            if (GetWindowRect(GetForegroundWindow(), &windowRect) &&
+                windowRect.left == mi.rcMonitor.left &&
+                windowRect.top == mi.rcMonitor.top &&
+                windowRect.right == mi.rcMonitor.right &&
+                windowRect.bottom == mi.rcMonitor.bottom)
+            {
+                return;
+            }
             FlashZones();
         }
     }
@@ -304,12 +320,6 @@ void ZoneWindow::InitializeZoneSets(MONITORINFO const& mi) noexcept
 {
     LoadZoneSetsFromRegistry();
 
-    if (m_zoneSets.empty())
-    {
-        // Add a "maximize" zone as the only default layout.
-        AddDefaultZoneSet(mi);
-    }
-
     if (!m_activeZoneSet)
     {
         ChooseDefaultActiveZoneSet();
@@ -365,20 +375,6 @@ void ZoneWindow::LoadZoneSetsFromRegistry() noexcept
 
         valueLength = ARRAYSIZE(value);
         dataSize = sizeof(data);
-    }
-}
-
-void ZoneWindow::AddDefaultZoneSet(MONITORINFO const& mi) noexcept
-{
-    GUID zoneSetId;
-    if (SUCCEEDED_LOG(CoCreateGuid(&zoneSetId)))
-    {
-        if (auto zoneSet = MakeZoneSet(ZoneSetConfig(zoneSetId, 0, m_monitor, m_workArea)))
-        {
-            zoneSet->AddZone(MakeZone(mi.rcWork));
-
-            m_zoneSets.emplace_back(zoneSet);
-        }
     }
 }
 
@@ -550,14 +546,14 @@ void ZoneWindow::DrawActiveZoneSet(wil::unique_hdc& hdc, RECT const& clientRect)
 
         //                                 { fillAlpha, fill, borderAlpha, border, thickness }
         ColorSetting const colorHints      { 225, RGB(81, 92, 107),   255, RGB(104, 118, 138), -2 };
-        ColorSetting       colorViewer     { 225, 0,                  255, RGB(40, 50, 60),    -2 };
-        ColorSetting       colorHighlight  { 225, 0,                  255, 0,                  -2 };
+        ColorSetting       colorViewer     { OpacitySettingToAlpha(m_host->GetZoneHighlightOpacity()), 0, 255, RGB(40, 50, 60),    -2 };
+        ColorSetting       colorHighlight  { OpacitySettingToAlpha(m_host->GetZoneHighlightOpacity()), 0, 255, 0, -2 };
         ColorSetting const colorFlash      { 200, RGB(81, 92, 107),   200, RGB(104, 118, 138), -2 };
 
         auto zones = m_activeZoneSet->GetZones();
         const size_t maxColorIndex = min(size(zones) - 1, size(colors) - 1);
         size_t colorIndex = maxColorIndex;
-        for (auto iter = zones.rbegin(); iter != zones.rend(); iter++)
+        for (auto iter = zones.begin(); iter != zones.end(); iter++)
         {
             winrt::com_ptr<IZone> zone = iter->try_as<IZone>();
             if (!zone)
@@ -634,10 +630,15 @@ winrt::com_ptr<IZone> ZoneWindow::ZoneFromPoint(POINT pt) noexcept
 
 void ZoneWindow::ChooseDefaultActiveZoneSet() noexcept
 {
-    if (!m_activeZoneSet)
-    {
-        auto zoneSet = m_zoneSets.at(0);
-        UpdateActiveZoneSet(zoneSet.get());
+    // Default zone set can be empty (no fancyzones layout), or it can be layout from virtual
+    // desktop from which this virtual desktop is created.
+    if (GUID id{ m_host->GetCurrentMonitorZoneSetId(m_monitor) }; id != GUID_NULL) {
+        for (const auto& zoneSet : m_zoneSets) {
+            if (id == zoneSet->Id()) {
+                UpdateActiveZoneSet(zoneSet.get());
+                return;
+            }
+        }
     }
 }
 
